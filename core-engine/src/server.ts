@@ -9,7 +9,7 @@ const app = express();
 
 app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -47,3 +47,4 @@ app.post('/webhook', async (req: Request, res: Response) => {
 app.listen(PORT, () => {
     console.log(`Core Infrastructure Engine running natively on port ${PORT}`);
 });
+

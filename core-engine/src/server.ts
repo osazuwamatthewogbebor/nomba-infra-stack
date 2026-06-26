@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from 'dotenv';
-import { timeStamp } from "node:console";
+import ws from 'ws'
 
 dotenv.config();
 
@@ -13,7 +13,18 @@ const PORT = process.env.PORT || 3000;
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: false
+  },
+  global: {
+    headers: { 'x-my-custom-header': 'nomba-infra' },
+  },
+  realtime: {
+    transport: ws as any,
+  },
+});
 
 app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({status: 'healthy', timeStamp: new Date()});

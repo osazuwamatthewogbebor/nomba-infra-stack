@@ -1,0 +1,28 @@
+import express, { Request, Response } from "express";
+import merchantRoutes from './routes/merchant';
+import checkoutRouter from './routes/checkout';
+import webhookRouter from './routes/webhook'; // This points to the updated cryptographic route
+import pool from './utils/db';
+import adminRouter from './routes/admin';
+
+const app = express();
+app.use(express.json());
+
+
+// Mount modular sub-routers
+app.use('/v1', merchantRoutes);
+app.use('/v1/checkout', checkoutRouter);
+app.use('/v1/webhooks', webhookRouter);
+app.use('/v1/admin', adminRouter);
+
+// Health check endpoint verifying pool stability
+app.get('/health', async (_req: Request, res: Response) => {
+    try {
+        await pool.query('SELECT 1');
+        return res.status(200).json({ status: 'healthy', timeStamp: new Date() });
+    } catch (error: any) {
+        return res.status(500).json({ status: 'unhealthy', error: error.message });
+    }
+});
+
+export default app;

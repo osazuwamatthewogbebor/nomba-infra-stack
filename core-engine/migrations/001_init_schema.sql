@@ -105,3 +105,21 @@ CREATE POLICY ledger_isolation_policy ON billing_ledger
 
 
 
+-- ==========================================================
+-- SCHEMA REFINEMENT MIGRATION
+-- ==========================================================
+
+-- 1. Explicitly tie a subscription instance to a specific tokenized card
+ALTER TABLE subscriptions 
+ADD COLUMN IF NOT EXISTS saved_card_id UUID REFERENCES saved_cards(id) ON DELETE SET NULL;
+
+ALTER TABLE subscriptions 
+ADD COLUMN retry_count INT DEFAULT 0 NOT NULL;
+
+-- 2. Add structural indexing for rapid background cron engine scans
+CREATE INDEX IF NOT EXISTS idx_subscriptions_billing_sweep 
+ON subscriptions (status, current_period_end) 
+WHERE status = 'ACTIVE';
+
+CREATE INDEX IF NOT EXISTS idx_saved_cards_customer
+ON saved_cards (customer_id);

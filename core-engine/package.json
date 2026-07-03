@@ -9,7 +9,8 @@
     "dev": "concurrently \"npm run dev:web\" \"npm run dev:cron\"",
     "build": "tsc",
     "start:web-prod": "node dist/server.js",
-    "start:cron-prod": "node dist/cron.js"
+    "start:cron-prod": "node dist/cron.js",
+    "start": "node dist/server.js"
   },
   "keywords": [],
   "author": "",

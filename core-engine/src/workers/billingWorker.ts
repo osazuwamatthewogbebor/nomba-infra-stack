@@ -143,8 +143,7 @@ export async function executeRecurringBillingRun() {
         logger.error(`Tokenized transaction processing failure for sub reference: ${task.subscription_id}. Error: ${runtimeErrorMessage}`);
 
         // Handle network timeouts vs explicit insufficient funds
-        const isInsufficientFunds = runtimeErrorMessage?.toLowerCase().includes('insufficient') || 
-                                     runtimeErrorMessage?.toLowerCase().includes('balance');
+        const isInsufficientFunds = runtimeErrorMessage?.toLowerCase().includes('insufficient') || runtimeErrorMessage?.toLowerCase().includes('balance');
 
         // Flag the profile context as PAST_DUE, increment retry tracking metric counts, and schedule a retry window
         let retryIntervalText = "1 day";

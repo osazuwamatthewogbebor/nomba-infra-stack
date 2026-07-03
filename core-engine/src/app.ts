@@ -25,6 +25,9 @@ app.get('/health', async (_req: Request, res: Response) => {
     }
 });
 
-// Home 
+// Home Route
+app.get('/', (_req: Request, res: Response) => {
+    res.status(200).json({ status: 'All systems GO', message: "Welcome to Subflow"})
+});
 
 export default app;

@@ -14,23 +14,22 @@ interface SubscriptionTask {
   token_key: string;
   customer_email: string;
   retry_count: number;
+  nomba_account_id: string; // Dynamically added to support our schema routing mapping bounds
 }
 
 /**
  * Programmatic Recurring Billing Worker
- * Designed to execute as an isolated background task or cron job
+ * Sweeps, locks, and processes due tokenized transactions via unique sub-account contexts
  */
 export async function executeRecurringBillingRun() {
   logger.info('Starting automated subscription renewal matrix scan...');
   
   const gatewayAccessToken = await getNombaAccessToken();
-  
-  // Cleanly await and capture the pool client connection resource
   const client = await pool.connect();
 
   try {
     // 1. SELECT and Lock active records requiring charge processing
-    // Uses SKIP LOCKED to avoid multi-instance execution overlapping or thread bottlenecks
+    // JOINs merchants table to extract individual sub-account IDs in a single operational sweep
     const queryPendingCharges = `
       SELECT 
         s.id as subscription_id,
@@ -41,11 +40,13 @@ export async function executeRecurringBillingRun() {
         p.amount_kobo,
         p.currency,
         c.email as customer_email,
-        sc.token_key
+        sc.token_key,
+        m.nomba_account_id
       FROM subscriptions s
       JOIN plans p ON s.plan_id = p.id
       JOIN customers c ON s.customer_id = c.id
       JOIN saved_cards sc ON s.saved_card_id = sc.id
+      JOIN merchants m ON s.merchant_id = m.id
       WHERE s.status IN ('ACTIVE', 'PAST_DUE')
         AND s.current_period_end <= NOW()
         AND s.retry_count < 5
@@ -61,25 +62,24 @@ export async function executeRecurringBillingRun() {
     logger.info(`Processing execution loops across ${targetedRows.rows.length} targeted renewals.`);
 
     for (const task of targetedRows.rows as SubscriptionTask[]) {
-      // Create a deterministic tracking reference unique to this billing execution loop iteration
       const currentRenewalAttemptUuid = crypto.randomUUID();
       const formattedAmount = (Number(task.amount_kobo) / 100).toFixed(2);
 
-      // Explicit isolation wrap for the individual row transaction block
       try {
         await client.query('BEGIN');
         
         // Match multi-tenant execution bounds within the query row loop
         await client.query(`SET LOCAL app.current_merchant_id = ${client.escapeLiteral(task.merchant_id)}`);
 
-        // Assemble the tokenized charge request mapping Nomba specifications
+        // Assemble the tokenized charge request mapping Nomba specifications dynamically
         const recurrentPayload = {
           order: {
-            orderReference: currentRenewalAttemptUuid, // Acts as the gateway's uniqueness anchor
+            orderReference: currentRenewalAttemptUuid,
             customerId: task.customer_id,
             amount: formattedAmount,
             currency: task.currency || 'NGN',
-            accountId: process.env.NOMBA_SUB_ACCOUNT_ID || undefined,
+            // Dynamically channels money straight into this developer's isolated balance wallet:
+            accountId: task.nomba_account_id || undefined, 
             orderMetaData: {
               merchantId: task.merchant_id,
               internalPlanRef: task.plan_id,
@@ -89,9 +89,8 @@ export async function executeRecurringBillingRun() {
           tokenKey: task.token_key
         };
 
-        logger.info(`Firing recurrent tokenized charge to Nomba infrastructure for subscription: ${task.subscription_id}`);
+        logger.info(`Firing recurrent tokenized charge to Nomba for subscription: ${task.subscription_id} mapped to Sub-Account: ${task.nomba_account_id}`);
 
-        // Set an explicit timeout to prevent connection hangs during network drops
         const gatewayResponse = await axios.post(
           `${process.env.NOMBA_API_URL}/v1/checkout/tokenized-card-payment`,
           recurrentPayload,
@@ -101,7 +100,7 @@ export async function executeRecurringBillingRun() {
               'Authorization': `Bearer ${gatewayAccessToken}`,
               'accountId': process.env.NOMBA_PARENT_ACCOUNT_ID || '',
             },
-            timeout: 15000 // 15-second cutoff threshold
+            timeout: 15000 
           }
         );
 
@@ -109,19 +108,18 @@ export async function executeRecurringBillingRun() {
         const responseDescription = gatewayResponse.data?.description;
 
         if (responseCode === '00') {
-          // Success Path: Push the billing window forward by 30 days and reset retry tracking metrics
+          // Success Path: Push the billing window forward by 1 month and reset retry tracking metrics
           await client.query(
             `UPDATE subscriptions 
              SET status = 'ACTIVE',
                  current_period_start = NOW(),
                  current_period_end = NOW() + INTERVAL '1 month',
-                 retry_count = 0,
-                 updated_at = NOW()
+                 retry_count = 0
              WHERE id = $1`,
             [task.subscription_id]
           );
 
-          // Write a successful credit audit ledger record entry (Fixed array bindings matching 6 targets)
+          // Write a successful credit audit ledger record entry
           await client.query(
             `INSERT INTO billing_ledger (merchant_id, subscription_id, amount_kobo, entry_type, transaction_ref, status)
              VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -130,7 +128,6 @@ export async function executeRecurringBillingRun() {
 
           logger.info(`Subscription renewal cycle successfully settled via token: ${task.subscription_id}`);
         } else {
-          // Handle explicit gateway declines (e.g., "Insufficient Funds" or "Expired Card")
           throw new Error(responseDescription || `Gateway payment decline code: ${responseCode}`);
         }
 
@@ -142,13 +139,12 @@ export async function executeRecurringBillingRun() {
         const runtimeErrorMessage = executionError.response?.data?.description || executionError.message;
         logger.error(`Tokenized transaction processing failure for sub reference: ${task.subscription_id}. Error: ${runtimeErrorMessage}`);
 
-        // Handle network timeouts vs explicit insufficient funds
-        const isInsufficientFunds = runtimeErrorMessage?.toLowerCase().includes('insufficient') || runtimeErrorMessage?.toLowerCase().includes('balance');
+        const runtimeLower = runtimeErrorMessage?.toLowerCase() || '';
+        const isInsufficientFunds = runtimeLower.includes('insufficient') || runtimeLower.includes('balance') || runtimeLower.includes('51');
 
-        // Flag the profile context as PAST_DUE, increment retry tracking metric counts, and schedule a retry window
         let retryIntervalText = "1 day";
         if (isInsufficientFunds) {
-          // Smart structural backoff: check again in 2 days to account for standard salary cycles
+          // Smart localized backoff: retry in 2 days to cleanly realign with funding/salary cycles
           retryIntervalText = "2 days";
         }
 
@@ -160,13 +156,12 @@ export async function executeRecurringBillingRun() {
             `UPDATE subscriptions 
              SET status = 'PAST_DUE',
                  retry_count = retry_count + 1,
-                 current_period_end = NOW() + INTERVAL '${retryIntervalText}',
-                 updated_at = NOW()
+                 current_period_end = NOW() + INTERVAL '${retryIntervalText}'
              WHERE id = $1`,
             [task.subscription_id]
           );
 
-          // Log an audited error footprint record line (Fixed array bindings matching 6 targets)
+          // Log an audited error footprint record line
           await client.query(
             `INSERT INTO billing_ledger (merchant_id, subscription_id, amount_kobo, entry_type, transaction_ref, status)
              VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -174,7 +169,11 @@ export async function executeRecurringBillingRun() {
           );
 
           await client.query('COMMIT');
-          logger.warn(`Subscription state updated to PAST_DUE. Scheduled retry tracking increment recorded. Ref: ${task.subscription_id}`);
+          logger.warn(`Subscription state updated to PAST_DUE. Scheduled retry window [${retryIntervalText}] recorded. Ref: ${task.subscription_id}`);
+          
+          // TODO: Stage 2 - Dispatch outbound signed dunning webhook notification to developer server URL
+          // dispatchDeveloperWebhook(task.merchant_id, 'subscription.failed', { subscriptionId: task.subscription_id });
+
         } catch (innerFallbackError: any) {
           await client.query('ROLLBACK');
           logger.error('Fatal internal logging crash while saving fallback error state loops:', innerFallbackError.message);
@@ -183,13 +182,8 @@ export async function executeRecurringBillingRun() {
     }
 
   } catch (globalCronError: any) {
-    logger.error('Critical unhandled system failure caught within core cron lifecycle:', {
-      message: globalCronError.message,
-      stack: globalCronError.stack,
-      errorObj: globalCronError
-    });
+    logger.error('Critical unhandled system failure caught within core cron lifecycle:', globalCronError.message);
   } finally {
-    // Standard safe connection release footprint pattern
     if (client) {
       client.release();
     }

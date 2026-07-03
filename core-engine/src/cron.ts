@@ -5,7 +5,7 @@ import logger from './utils/logger';
 
 dotenv.config();
 
-logger.info('⚙️ Background Cron Worker Process Initiated.');
+logger.info('Background Cron Worker Process Initiated.');
 
 // Triggers every day at 1:00 AM WAT (safely outside peak midnight banking strain)
 cron.schedule('0 1 * * *', async () => {

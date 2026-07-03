@@ -6,10 +6,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE merchants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     business_name VARCHAR(255) NOT NULL,
-    nomba_client_id VARCHAR(255) NOT NULL,
-    nomba_client_secret VARCHAR(255) NOT NULL,
-    nomba_account_id UUID NOT NULL,
-    webhook_secret VARCHAR(255) NOT NULL,
+    api_key_hash VARCHAR(64) UNIQUE, -- SHA-256 hash of the generated platform api_key
+    nomba_account_id VARCHAR(255), -- Maps programmatically to their unique Nomba sub-account/wallet string
+    webhook_url TEXT, -- Downstream developer destination endpoint
+    webhook_secret VARCHAR(255) NOT NULL, -- Key used to sign the outbound payload hash
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -53,7 +53,9 @@ CREATE TABLE subscriptions (
     merchant_id UUID NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
     plan_id UUID NOT NULL REFERENCES plans(id),
+    saved_card_id UUID REFERENCES saved_cards(id) ON DELETE SET NULL, -- Explicitly ties instance to active card token
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, ACTIVE, PAST_DUE, UNPAID, CANCELLED
+    retry_count INT DEFAULT 0 NOT NULL,
     current_period_start TIMESTAMP WITH TIME ZONE NOT NULL,
     current_period_end TIMESTAMP WITH TIME ZONE NOT NULL,
     idempotency_key VARCHAR(255),
@@ -79,7 +81,17 @@ CREATE TABLE processed_webhooks (
 );
 
 -- ==========================================
--- 3. ROW-LEVEL SECURITY (RLS) POLICIES
+-- 3. SPEED & OPTIMIZATION INDEXING
+-- ==========================================
+CREATE INDEX IF NOT EXISTS idx_subscriptions_billing_sweep 
+ON subscriptions (status, current_period_end) 
+WHERE status IN ('ACTIVE', 'PAST_DUE'); -- Extended to track PAST_DUE collections smoothly
+
+CREATE INDEX IF NOT EXISTS idx_saved_cards_customer
+ON saved_cards (customer_id);
+
+-- ==========================================
+-- 4. ROW-LEVEL SECURITY (RLS) POLICIES
 -- ==========================================
 ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
@@ -101,25 +113,3 @@ CREATE POLICY subscription_isolation_policy ON subscriptions
 
 CREATE POLICY ledger_isolation_policy ON billing_ledger
     FOR ALL USING (merchant_id = NULLIF(current_setting('app.current_merchant_id', true), '')::UUID);
-
-
-
-
--- ==========================================================
--- SCHEMA REFINEMENT MIGRATION
--- ==========================================================
-
--- 1. Explicitly tie a subscription instance to a specific tokenized card
-ALTER TABLE subscriptions 
-ADD COLUMN IF NOT EXISTS saved_card_id UUID REFERENCES saved_cards(id) ON DELETE SET NULL;
-
-ALTER TABLE subscriptions 
-ADD COLUMN retry_count INT DEFAULT 0 NOT NULL;
-
--- 2. Add structural indexing for rapid background cron engine scans
-CREATE INDEX IF NOT EXISTS idx_subscriptions_billing_sweep 
-ON subscriptions (status, current_period_end) 
-WHERE status = 'ACTIVE';
-
-CREATE INDEX IF NOT EXISTS idx_saved_cards_customer
-ON saved_cards (customer_id);

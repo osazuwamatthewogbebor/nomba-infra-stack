@@ -16,6 +16,8 @@ interface InitializeCheckoutPayload {
 
 /**
  * POST /v1/checkout/initialize
+ * Creates a stateful subscription checkout instance mapped dynamically 
+ * to the merchant's unique Nomba Sub-Account.
  */
 router.post('/initialize', async (req: Request, res: Response) => {
     const client = await pool.connect();
@@ -37,7 +39,20 @@ router.post('/initialize', async (req: Request, res: Response) => {
         // Initialize Row-Level Security context for this connection session
         await client.query(`SET LOCAL app.current_merchant_id = ${client.escapeLiteral(merchantId)}`);
 
-        // 1. Fetch Plan Context through active RLS gate
+        // 1. Resolve the Merchant's platform configuration to get their specific Sub-Account ID
+        const merchantQuery = await client.query(
+            'SELECT nomba_account_id FROM merchants WHERE id = $1',
+            [merchantId]
+        );
+
+        if (merchantQuery.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, error: 'Merchant context workspace not found.' });
+        }
+        
+        const targetSubAccountId = merchantQuery.rows[0].nomba_account_id;
+
+        // 2. Fetch Plan Context through active RLS gate
         const planQuery = await client.query(
             'SELECT id, name, amount_kobo, currency FROM plans WHERE id = $1', 
             [planId]
@@ -49,7 +64,7 @@ router.post('/initialize', async (req: Request, res: Response) => {
         }
         const plan = planQuery.rows[0];
 
-        // 2. Resolve Customer Profile Entity (Create if it doesn't exist)
+        // 3. Resolve Customer Profile Entity (Create if it doesn't exist)
         const customerUpsert = await client.query(
             `INSERT INTO customers (merchant_id, email)
              VALUES ($1, $2)
@@ -60,14 +75,14 @@ router.post('/initialize', async (req: Request, res: Response) => {
         );
         const customerId = customerUpsert.rows[0].id;
 
-        // Use a clean UUID string for both tracking arrays and the gateway references
+        // Formulate deterministic references
         const orderReference = crypto.randomUUID();
         const formattedAmount = (Number(plan.amount_kobo) / 100).toFixed(2);
         
-        // Fetch active access token from your OAuth utility service
+        // Fetch global platform OAuth management token
         const gatewayAccessToken = await getNombaAccessToken();
 
-        // 3. Construct payload strictly matching Nomba requirements
+        // 4. Construct payload dynamically binding the merchant's target wallet destination
         const nombaPayload = {
             order: {
                 callbackUrl: callbackUrl,
@@ -75,8 +90,9 @@ router.post('/initialize', async (req: Request, res: Response) => {
                 amount: formattedAmount,
                 currency: plan.currency || 'NGN',
                 orderReference: orderReference,
-                customerId: customerId, // Passing our unique internal customer identifier string
-                accountId: process.env.NOMBA_SUB_ACCOUNT_ID || undefined, // Corrected typo here
+                customerId: customerId,
+                // Dynamically routed straight into this developer's isolated balance wallet:
+                accountId: targetSubAccountId || undefined, 
                 allowedPaymentMethods: ['Card', 'Transfer'],
                 orderMetaData: {
                     productName: plan.name,
@@ -84,10 +100,10 @@ router.post('/initialize', async (req: Request, res: Response) => {
                     merchantId: merchantId,
                 }
             },
-            tokenizeCard: true // Boolean type parameter passing matching standard schemas
+            tokenizeCard: true // Instructs Nomba to return tokenized key payload on checkout success
         };
 
-        logger.info('Forwarding payload structure to Nomba Checkout API...', { orderReference, merchantId });
+        logger.info('Forwarding dynamic sub-account layout payload to Nomba Checkout...', { orderReference, merchantId, targetSubAccountId });
 
         const response = await axios.post(
             `${process.env.NOMBA_API_URL}/v1/checkout/order`,
@@ -104,7 +120,7 @@ router.post('/initialize', async (req: Request, res: Response) => {
         if (response.data?.code === '00') {
             const checkoutData = response.data.data;
 
-            // 4. Pre-stage pending subscription state log matching database constraints
+            // 5. Pre-stage pending subscription state log matching database constraints
             await client.query(
                 `INSERT INTO subscriptions (
                     merchant_id, customer_id, plan_id, status, 

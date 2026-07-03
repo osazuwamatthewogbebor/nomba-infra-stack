@@ -1,33 +1,47 @@
 import { Router, Request, Response } from 'express';
 import pool, { executeTenantQuery } from '../utils/db';
+import crypto from 'crypto';
 
 const router = Router();
 
 // Test root route to confirm mounting works
-// This will match: GET http://localhost:3000/v1
 router.get('/', (req: Request, res: Response) => {
     return res.status(200).json({ message: "v1 base router is completely working!" });
 });
 
-// This will match: POST http://localhost:3000/v1/merchants/onboard
+/**
+ * Merchant Onboarding Endpoint
+ * Programmatically provisions a unique developer platform API Key 
+ * and maps their upcoming Nomba Sub-Account destination.
+ */
 router.post('/merchants/onboard', async (req: Request, res: Response) => {
     try {
-        const { businessName, nombaClientId, nombaClientSecret, nombaAccountId, webhookSecret } = req.body;
+        const { businessName, nombaAccountId, webhookUrl, webhookSecret } = req.body;
 
-        if (!businessName || !nombaClientId || !nombaClientSecret || !nombaAccountId || !webhookSecret) {
-            return res.status(400).json({ error: 'Missing required merchant configuration fields.' });
+        if (!businessName || !webhookSecret) {
+            return res.status(400).json({ error: 'Missing mandatory onboarding configuration fields.' });
         }
 
+        // 1. Generate a high-entropy, secure API key for the developer
+        const plainTextApiKey = `nsb_live_${crypto.randomBytes(24).toString('hex')}`;
+        
+        // 2. Hash it via SHA-256 for secure database persistence matching our schema
+        const apiKeyHash = crypto.createHash('sha256').update(plainTextApiKey).digest('hex');
+
+        // 3. Persist the merchant data grid configuration slot
+        // NOTE: nombaAccountId will be updated programmatically in Stage 2 via Nomba's Sub-Account creation endpoint.
         const result = await pool.query(
-            `INSERT INTO merchants (business_name, nomba_client_id, nomba_client_secret, nomba_account_id, webhook_secret)
+            `INSERT INTO merchants (business_name, api_key_hash, nomba_account_id, webhook_url, webhook_secret)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id, business_name, created_at`,
-            [businessName, nombaClientId, nombaClientSecret, nombaAccountId, webhookSecret]
+            [businessName, apiKeyHash, nombaAccountId || null, webhookUrl || null, webhookSecret]
         );
 
+        // 4. Expose the unhashed plain-text key to the developer exactly once
         return res.status(201).json({
             success: true,
-            message: 'Merchant platform profile created successfully.',
+            message: 'Merchant platform profile created successfully. Secure your API key safely.',
+            apiKey: plainTextApiKey,
             merchant: result.rows[0]
         });
     } catch (error: any) {
@@ -36,7 +50,10 @@ router.post('/merchants/onboard', async (req: Request, res: Response) => {
     }
 });
 
-// This will match: POST http://localhost:3000/v1/plans
+/**
+ * Plan Registration Endpoint
+ * Securely wraps execution inside the tenant-isolated pool connection context
+ */
 router.post('/plans', async (req: Request, res: Response) => {
     try {
         const merchantId = req.headers['x-merchant-id'] as string;
@@ -71,7 +88,10 @@ router.post('/plans', async (req: Request, res: Response) => {
     }
 });
 
-// This will match: GET http://localhost:3000/v1/plans
+/**
+ * Fetch Tenant Plans Endpoint
+ * Protected against data boundary cross-contamination via enforced context filtering
+ */
 router.get('/plans', async (req: Request, res: Response) => {
     try {
         const merchantId = req.headers['x-merchant-id'] as string;

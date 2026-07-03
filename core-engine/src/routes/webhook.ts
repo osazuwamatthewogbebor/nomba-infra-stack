@@ -39,12 +39,14 @@ function generateNombaSignature(payload: any, secret: string, timestamp: string)
 
 /**
  * POST /v1/webhooks/nomba
+ * Central ingestion node for incoming edge-buffered payment events
  */
 router.post('/nomba', async (req: Request, res: Response) => {
   try {
     const incomingSignature = req.headers['nomba-signature'] as string;
     const incomingTimestamp = req.headers['nomba-timestamp'] as string;
-    const webhookSecret = process.env.NOMBA_WEBHOOK_SECRET || 'your_shared_dashboard_secret';
+    // Authenticates using global parent portal secret configuration
+    const webhookSecret = process.env.NOMBA_PARENT_WEBHOOK_SECRET || 'your_shared_dashboard_secret';
 
     if (!incomingSignature || !incomingTimestamp) {
       logger.warn('Rejected webhook: Missing validation parameters in request headers.');
@@ -70,10 +72,10 @@ router.post('/nomba', async (req: Request, res: Response) => {
       const { data } = payload;
       const transactionData = data?.transaction;
       const orderData = data?.order;
-      const tokenData = data?.tokenizedCardData; // The official object key discovered
+      const tokenData = data?.tokenizedCardData; 
 
-      const subscriptionId = orderData?.orderReference; // Linked via checkout init
-      const customerId = orderData?.customerId;         // Internal customer UUID string
+      const subscriptionId = orderData?.orderReference; 
+      const customerId = orderData?.customerId;         
       const tenantMerchantId = orderData?.orderMetaData?.merchantId;
       const transactionId = transactionData?.transactionId;
       
@@ -140,15 +142,18 @@ router.post('/nomba', async (req: Request, res: Response) => {
           throw new Error(`Target pending subscription row ${subscriptionId} could not be located or updated.`);
         }
 
-        // 7. Balance Ledger Ingestion
+        // 7. Balance Ledger Ingestion (Fixed variable mapping bounds)
         await client.query(
           `INSERT INTO billing_ledger (merchant_id, subscription_id, amount_kobo, entry_type, transaction_ref, status)
-           VALUES ($1, $2, $3, 'CREDIT', $4, 'SUCCESS')`,
-          [tenantMerchantId, subscriptionId, amountKobo, transactionId || orderData?.orderId, 'SUCCESS']
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [tenantMerchantId, subscriptionId, amountKobo, 'CREDIT', transactionId || orderData?.orderId, 'SUCCESS']
         );
 
         await client.query('COMMIT');
         logger.info('Ledger cycle balancing resolved. Subscription initialized successfully.', { subscriptionId });
+
+        // TODO: Stage 2 - Trigger Outbound Webhook Fan-out Engine here to notify downstream developer url
+        // dispatchDeveloperWebhook(tenantMerchantId, 'subscription.renewed', { subscriptionId, amountKobo });
 
       } catch (txnError: any) {
         await client.query('ROLLBACK');

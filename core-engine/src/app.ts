@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import merchantRoutes from './routes/merchant';
 import checkoutRouter from './routes/checkout';
-import webhookRouter from './routes/webhook'; // This points to the updated cryptographic route
+import webhookRouter from './routes/webhook'; 
 import pool from './utils/db';
 import adminRouter from './routes/admin';
 
@@ -24,5 +24,7 @@ app.get('/health', async (_req: Request, res: Response) => {
         return res.status(500).json({ status: 'unhealthy', error: error.message });
     }
 });
+
+// Home 
 
 export default app;

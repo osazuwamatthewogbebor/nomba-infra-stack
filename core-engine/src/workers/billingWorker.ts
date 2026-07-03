@@ -24,8 +24,9 @@ export async function executeRecurringBillingRun() {
   logger.info('Starting automated subscription renewal matrix scan...');
   
   const gatewayAccessToken = await getNombaAccessToken();
-  const workerClientId = pool.connect();
-  const client = await workerClientId;
+  
+  // Cleanly await and capture the pool client connection resource
+  const client = await pool.connect();
 
   try {
     // 1. SELECT and Lock active records requiring charge processing
@@ -120,11 +121,11 @@ export async function executeRecurringBillingRun() {
             [task.subscription_id]
           );
 
-          // Write a successful credit audit ledger record entry
+          // Write a successful credit audit ledger record entry (Fixed array bindings matching 6 targets)
           await client.query(
             `INSERT INTO billing_ledger (merchant_id, subscription_id, amount_kobo, entry_type, transaction_ref, status)
-             VALUES ($1, $2, $3, 'CREDIT', $4, 'SUCCESS')`,
-            [task.merchant_id, task.subscription_id, task.amount_kobo, currentRenewalAttemptUuid, 'SUCCESS']
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [task.merchant_id, task.subscription_id, task.amount_kobo, 'CREDIT', currentRenewalAttemptUuid, 'SUCCESS']
           );
 
           logger.info(`Subscription renewal cycle successfully settled via token: ${task.subscription_id}`);
@@ -166,11 +167,11 @@ export async function executeRecurringBillingRun() {
             [task.subscription_id]
           );
 
-          // Log an audited error footprint record line
+          // Log an audited error footprint record line (Fixed array bindings matching 6 targets)
           await client.query(
             `INSERT INTO billing_ledger (merchant_id, subscription_id, amount_kobo, entry_type, transaction_ref, status)
-             VALUES ($1, $2, $3, 'DEBIT_FAIL', $4, 'FAILED')`,
-            [task.merchant_id, task.subscription_id, task.amount_kobo, currentRenewalAttemptUuid, 'FAILED']
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [task.merchant_id, task.subscription_id, task.amount_kobo, 'DEBIT', currentRenewalAttemptUuid, 'FAILED']
           );
 
           await client.query('COMMIT');
@@ -189,8 +190,9 @@ export async function executeRecurringBillingRun() {
       errorObj: globalCronError
     });
   } finally {
-    if (workerClientId && typeof (await workerClientId).release === 'function') {
-      (await workerClientId).release();
+    // Standard safe connection release footprint pattern
+    if (client) {
+      client.release();
     }
   }
 }

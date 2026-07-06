@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 // Serve Live UI Documentation Interactive Manual instantly with Cache-Control bypass
-app.use('/docs', (req: Request, res: Response, next: NextFunction) => {
+app.use('/api-docs', (req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Expires', '0');
     res.setHeader('Surrogate-Control', 'no-store'); // Tells Cloudflare explicitly not to cache
@@ -19,7 +19,7 @@ app.use('/docs', (req: Request, res: Response, next: NextFunction) => {
 }, swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 app.use(
-  '/docs',
+  '/api-docs',
   swaggerUi.serve,
   swaggerUi.setup(swaggerDocument, {
     swaggerOptions: { persistAuthorization: true },

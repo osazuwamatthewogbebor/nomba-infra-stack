@@ -4,5 +4,8 @@
   "compatibility_date": "2026-06-26",
   "observability": {
     "enabled": true
+  },
+  "vars": {
+    "BACK4APP_URL": "https://nomba-infra-stack.pxxl.run/v1/webhooks/nomba"
   }
 }

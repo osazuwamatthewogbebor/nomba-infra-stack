@@ -11,35 +11,21 @@ const app = express();
 app.use(express.json());
 
 // Serve Live UI Documentation Interactive Manual instantly with Cache-Control bypass
-// app.use('/api-docs', (req: Request, res: Response, next: NextFunction) => {
-//     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-//     res.setHeader('Expires', '0');
-//     res.setHeader('Surrogate-Control', 'no-store'); // Tells Cloudflare explicitly not to cache
-//     next();
-// }, swaggerUi.serve, swaggerUi.setup(swaggerDocument));
-
-// app.use(
-//   '/api-docs',
-//   swaggerUi.serve,
-//   swaggerUi.setup(swaggerDocument, {
-//     swaggerOptions: { persistAuthorization: true },
-//     customSiteTitle: "Subflow Core Billing Docs Core"
-//   })
-// );
-
-// 🚀 Dynamic, Cache-Busted Live UI Documentation Setup
-app.use('/docs', swaggerUi.serve);
-app.get('/docs', (req: Request, res: Response) => {
-    // Force headers to destroy any downstream caching layers completely
+app.use('/api-docs', (req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Expires', '0');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Surrogate-Control', 'no-store'); // Strict Cloudflare bypass command
+    res.setHeader('Surrogate-Control', 'no-store'); // Tells Cloudflare explicitly not to cache
+    next();
+}, swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-    // Generate the setup HTML dynamically on every single hit
-    const html = swaggerUi.generateHTML(swaggerDocument);
-    return res.send(html);
-});
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDocument, {
+    swaggerOptions: { persistAuthorization: true },
+    customSiteTitle: "Subflow Core Billing Docs Core"
+  })
+);
 
 // Mount modular sub-routers
 app.use('/v1', merchantRoutes);

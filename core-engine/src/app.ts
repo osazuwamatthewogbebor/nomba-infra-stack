@@ -11,12 +11,12 @@ const app = express();
 app.use(express.json());
 
 // Serve Live UI Documentation Interactive Manual instantly with cache busting flags
-app.use('/docs', (req: Request, res: Response, next) => {
+app.use('/api-docs', (req: Request, res: Response, next) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   next();
 });
 app.use(
-  '/docs',
+  '/api-docs',
   swaggerUi.serve,
   swaggerUi.setup(swaggerDocument, {
     swaggerOptions: { persistAuthorization: true },

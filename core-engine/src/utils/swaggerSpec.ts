@@ -17,17 +17,19 @@ export const swaggerDocument = {
   ],
   components: {
     securitySchemes: {
-      MerchantIdentityHeader: {
-        type: "apiKey",
-        in: "header",
-        name: "x-merchant-id",
-        description: "The unique UUIDv4 tenant identification handle assigning execution context to a developer's workspace."
+      // 🔑 The actual security credential lock for authentication
+      DeveloperApiKeyAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "API Key",
+        description: "The plain-text authentication token (nsb_live_...) generated during onboarding used to verify authorization."
       }
     }
   },
+  // Apply HTTP Bearer authentication globally across all endpoints unless overridden
   security: [
     {
-      MerchantIdentityHeader: []
+      DeveloperApiKeyAuth: []
     }
   ],
   paths: {
@@ -35,7 +37,8 @@ export const swaggerDocument = {
       post: {
         tags: ["Workspace Management"],
         summary: "Provision a Developer Workspace Profile",
-        description: "Creates an isolated workspace partition. Generates a secure, high-entropy plain text API token displayed exactly once, and hashes it using SHA-256 for secure DB mapping.",
+        description: "Public registration endpoint. Creates an isolated workspace partition. Generates a secure, high-entropy plain text API token displayed exactly once, and hashes it using SHA-256 for secure DB mapping.",
+        security: [], // Public onboarding endpoint - overrides global security
         requestBody: {
           required: true,
           content: {
@@ -65,7 +68,7 @@ export const swaggerDocument = {
                     merchant: {
                       type: "object",
                       properties: {
-                        id: { type: "string", format: "uuid" },
+                        id: { type: "string", format: "uuid", description: "The unique public workspace tenant UUID used for the x-merchant-id header context." },
                         business_name: { type: "string" }
                       }
                     }
@@ -81,7 +84,16 @@ export const swaggerDocument = {
       post: {
         tags: ["Billing Configurations"],
         summary: "Register a Tiered Billing Plan",
-        security: [{ MerchantIdentityHeader: [] }],
+        description: "Creates an active pricing plan tier locked strictly inside the tenant partition.",
+        parameters: [
+          {
+            in: "header",
+            name: "x-merchant-id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The public tenant UUIDv4 handle used to map PostgreSQL Row-Level Security (RLS) execution context."
+          }
+        ],
         requestBody: {
           required: true,
           content: {
@@ -107,7 +119,15 @@ export const swaggerDocument = {
         tags: ["Billing Configurations"],
         summary: "Fetch Workspace Specific Billing Tiers",
         description: "Retrieves active configurations. Enforced strictly against cross-workspace boundary leaks using PostgreSQL session-scoped Row-Level Security.",
-        security: [{ MerchantIdentityHeader: [] }],
+        parameters: [
+          {
+            in: "header",
+            name: "x-merchant-id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The public tenant UUIDv4 handle used to map PostgreSQL Row-Level Security (RLS) execution context."
+          }
+        ],
         responses: {
           "200": { description: "Isolated plan array compiled and returned." }
         }
@@ -118,7 +138,15 @@ export const swaggerDocument = {
         tags: ["Core Billing Operations"],
         summary: "Initialize Subscription Flow (Card Checkout Link or Persistent NUBAN)",
         description: "Dynamically spins up an automated billing lifecycle. If VIRTUAL_ACCOUNT is selected, a unique, persistent bank account is generated via the Nomba network using compliant sandbox KYC markers.",
-        security: [{ MerchantIdentityHeader: [] }],
+        parameters: [
+          {
+            in: "header",
+            name: "x-merchant-id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The public tenant UUIDv4 handle used to map PostgreSQL Row-Level Security (RLS) execution context."
+          }
+        ],
         requestBody: {
           required: true,
           content: {
@@ -147,6 +175,7 @@ export const swaggerDocument = {
       post: {
         tags: ["Outbound Developer Webhooks (Fan-out Engine)"],
         summary: "Downstream Event Ingestion Structure (Reference Spec)",
+        security: [], // Incoming payloads to downstream developers do not consume internal bearer schemes
         parameters: [
           { in: "header", name: "X-Platform-Signature", required: true, schema: { type: "string" }, description: "HMAC-SHA256 signature calculated across the timestamp and body payload string using the workspace's webhookSecret." },
           { in: "header", name: "X-Platform-Timestamp", required: true, schema: { type: "string" } }

@@ -46,6 +46,101 @@ The platform separates real-time payment ingestion from heavy asynchronous datab
 
 ---
 
+## Interactive API Documentation Interfaces
+
+The system serves interactive Swagger UI documentation manuals matching production configurations.
+
+* **Local Development Environment:** `http://localhost:5000/docs`
+* **Live Staging/Production Deployment:** `https://nomba-infra-stack.pxxl.run/docs`
+
+### Decoupled Authentication Security Setup
+
+To test protected workspace endpoints using the Swagger UI interface, supply parameters into the interface as follows:
+
+1. **The Authorization Key (`DeveloperApiKeyAuth`):** Click the **Authorize** lock icon at the top of the interface and input the plain text bearer token string (`nsb_live_...`) generated during registration.
+2. **The Context Identifier Header (`x-merchant-id`):** Provide the raw workspace UUIDv4 string into the header input field for the targeted endpoint to configure the session context for PostgreSQL Row-Level Security.
+
+---
+
+## Core System Transactional Flowcharts
+
+### 1. Merchant Workspace Onboarding Flow
+
+Creates the multi-tenant database partition boundary, returns credentials, and provisions an isolated accounting wallet structure via the gateway rails.
+
+```text
+Downstream Dev                     Subflow Core Engine                Nomba Core Rails
+      |                                     |                                 |
+      |--- POST /v1/merchants/onboard ----->|                                 |
+      |    (Passes Brand & Webhook Details) |                                 |
+      |                                     |---- Programmatic Provision ---->|
+      |                                     |<--- Sub-Account Parameters -----|
+      |                                     |                                 |
+      |                                     |-- [SHA-256 Hash Secret Key]     |
+      |                                     |-- [Commit Workspace Context]    |
+      |<-- Return Text Key & Tenant UUID ---|                                 |
+      |    (nsb_live_... & x-merchant-id)   |                                 |
+
+```
+
+### 2. Tiered Plan Creation & Discovery Flow
+
+Demonstrates isolated configuration execution under database-enforced protection walls.
+
+```text
+Downstream Dev                     Subflow Core Engine                Supabase Postgres
+      |                                     |                                 |
+      |--- POST /v1/plans ----------------->|                                 |
+      |    Headers: Authorization & ID      |--- SET LOCAL merchant_id ------>|
+      |    Payload: { amountKobo, interval }|    (Pin Transaction Scope)      |
+      |                                     |                                 |
+      |                                     |--- INSERT INTO plans ---------->|
+      |                                     |    (RLS intercepts & verifies)  |
+      |<-- Status 201 Plan Created ---------|                                 |
+
+```
+
+### 3. Subscription Payment Order Initialization Flow
+
+Deconstructs handling routes based on user payment preference parameters.
+
+```text
+Subscriber Client                 Downstream Dev                  Subflow Core Engine
+      |                                 |                                 |
+      |--- Trigger Checkout Action ---->|                                 |
+      |                                 |--- POST /v1/checkout/initialize >|
+      |                                 |    Headers: Auth & Tenant ID     |
+      |                                 |                                 |
+      |                                 |    [PATH A: VIRTUAL ACCOUNT]    |
+      |                                 |    -> Requests Nomba NUBAN      |
+      |<-- Return Assigned Bank NUBAN -------------------------------------|
+      |                                 |                                 |
+      |                                 |    [PATH B: CARD OPTION]        |
+      |                                 |    -> Generates Checkout Link   |
+      |<-- Return Active Payment Link -------------------------------------|
+
+```
+
+### 4. Real-Time Webhook Processing & Fan-Out Flow
+
+Traces how event notifications map to downstream servers securely from edge interception nodes.
+
+```text
+Nomba Gateway Rails             Cloudflare Worker Edge            Subflow Core App             Downstream Dev Server
+        |                                 |                              |                              |
+        |-- Payment Success Notification >|                              |                              |
+        |                                 |-- [Validate Parent Signature]|                              |
+        |                                 |--- Proxy Request Forward --->|                              |
+        |                                 |                              |-- [Resolve Sub Reference]    |
+        |                                 |                              |-- [Update Database State]   |
+        |                                 |                              |-- [Calculate Signature]     |
+        |                                 |                              |--- dispatchDeveloperWebhook >|
+        |                                 |                              |                              |<-- Returns 200 OK
+
+```
+
+---
+
 ## The Security & Multi-Tenant Sandbox Model
 
 Data privacy is strictly enforced directly inside **Postgres via Row-Level Security (RLS)** rather than relying on standard application-layer `WHERE` clauses.
@@ -71,9 +166,9 @@ Data privacy is strictly enforced directly inside **Postgres via Row-Level Secur
 
 ```
 
-* **One-Time Token Exposure:** Merchants register and receive a raw token key (`nsb_live_...`). The platform stores only the one-way **SHA-256 hash** of this key. Even in the event of a database leak, active API keys remain completely unreadable.
+* **One-Time Token Exposure:** Merchants register via `/merchants/onboard` and receive a raw token key (`nsb_live_...`). The platform stores only the one-way **SHA-256 hash** of this key. Even in the event of a database leak, active API keys remain completely unreadable.
 * **Session Pinning:** Every pooled client connection runs `SET LOCAL app.current_merchant_id = 'uuid'` inside an isolated transaction block (`BEGIN ... COMMIT`).
-* **Zero Leak Footprint:** If an engineer writes a broad `SELECT * FROM subscriptions` without filtering by tenant, the database interceptor automatically catches it and strictly exposes rows matching that transaction's context.
+* **Zero Leak Footprint:** If an engineer writes a broad `SELECT * FROM plans` without filtering by tenant, the database interceptor automatically catches it and strictly exposes rows matching that transaction's context.
 
 ---
 
@@ -106,6 +201,14 @@ Engineered specifically to handle payment failures gracefully without hitting ne
 * **Insufficient Funds (Decline Code 51):** Steps back dynamically to a 2-day interval window to align intelligently with standard consumer salary and wallet funding cycles.
 * **Hard Threshold Caps:** Completely stops retrying after 5 failed consecutive attempts to preserve API resource limits.
 
+### 5. Mathematical Proration Upgrade Logic
+
+Allows customers to safely scale up or upgrade subscription tiers mid-cycle. The core system calculates elapsed and remaining value ratios across seconds using the formula:
+
+$$\text{Prorated Charge} = \left( \frac{\text{Remaining Time}}{\text{Total Time}} \times \text{Target Plan Rate} \right) - \left( \frac{\text{Remaining Time}}{\text{Total Time}} \times \text{Current Plan Rate} \right)$$
+
+This guarantees fair billing execution while avoiding downstream manual balance adjustments.
+
 ---
 
 ## Environment & Local Configuration
@@ -114,16 +217,17 @@ Create a `.env` file in your root workspace:
 
 ```env
 PORT=5000
-DATABASE_URL="postgresql://postgres.[id]:[pass]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+DATABASE_URL="postgresql://postgres.[id]:[pass]@[aws-0-eu-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true](https://aws-0-eu-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true)"
 ADMIN_TRIGGER_SECRET=your_secure_admin_passphrase
 
-NOMBA_API_URL=https://dev.api.nomba.com
+NOMBA_API_URL=[https://dev.api.nomba.com](https://dev.api.nomba.com)
 NOMBA_PARENT_ACCOUNT_ID=your_parent_account_reference
 NOMBA_PARENT_WEBHOOK_SECRET=your_global_parent_webhook_secret_key
 
 # Primary Master OAuth Keys
 LIVE_CLIENT_ID=your_nomba_client_id
 LIVE_PRIVATE_KEY=your_nomba_client_secret
+SANDBOX_TEST_BVN=22222222222
 
 ```
 
@@ -145,11 +249,11 @@ npm run build && npm start
 
 ## Out-of-Band Manual Verification
 
-Test the automated asynchronous renewal runner instantly by sending a authenticated payload directly to the protected admin bridge:
+Test the automated asynchronous renewal runner instantly by sending an authenticated payload directly to the protected admin bridge:
 
 ```bash
 curl --request POST \
-  --url https://nomba-infra-stack.pxxl.run/v1/admin/trigger-billing \
+  --url [https://nomba-infra-stack.pxxl.run/v1/admin/trigger-billing](https://nomba-infra-stack.pxxl.run/v1/admin/trigger-billing) \
   --header 'Content-Type: application/json' \
   --header 'x-admin-secret: your_secure_admin_passphrase'
 

@@ -10,8 +10,17 @@ import adminRouter from './routes/admin';
 const app = express();
 app.use(express.json());
 
-// 🚀 Serve Live UI Documentation Interactive Manual instantly
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+// Serve Live UI Documentation Interactive Manual instantly with cache busting flags
+app.use(
+    '/docs', 
+    swaggerUi.serve, 
+    swaggerUi.setup(swaggerDocument, {
+        swaggerOptions: {
+            persistAuthorization: true, 
+        },
+        customSiteTitle: "Subflow Core Billing Docs Core"
+    })
+);
 
 // Mount modular sub-routers
 app.use('/v1', merchantRoutes);

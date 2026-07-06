@@ -38,16 +38,17 @@ export const swaggerDocument = {
         tags: ["Workspace Management"],
         summary: "Provision a Developer Workspace Profile",
         description: "Public registration endpoint. Creates an isolated workspace partition. Generates a secure, high-entropy plain text API token displayed exactly once, and hashes it using SHA-256 for secure DB mapping.",
-        security: [], // Public onboarding endpoint - overrides global security
+        security: [],
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["businessName", "webhookSecret"],
+                required: ["businessName", "domain", "webhookSecret"],
                 properties: {
                   businessName: { type: "string", example: "Acme Software Ltd" },
+                  domain: { type: "string", example: "acme.com", description: "Globally unique company domain identifier." },
                   webhookUrl: { type: "string", example: "https://api.acme.com/subflow-receiver" },
                   webhookSecret: { type: "string", example: "whsec_prod_signing_secret_key_001" }
                 }

@@ -10,9 +10,20 @@ router.get('/', (req: Request, res: Response) => {
 
 router.post('/merchants/onboard', async (req: Request, res: Response) => {
     try {
-        const { businessName, webhookUrl, webhookSecret } = req.body;
-        if (!businessName || !webhookSecret) {
-            return res.status(400).json({ error: 'Missing mandatory configuration bounds.' });
+        const { businessName, domain, webhookUrl, webhookSecret } = req.body;
+        
+        // 🛡️ Added domain constraint validation block
+        if (!businessName || !domain || !webhookSecret) {
+            return res.status(400).json({ error: 'Missing mandatory configuration bounds. Ensure domain is supplied.' });
+        }
+
+        // Basic domain normalization
+        const normalizedDomain = domain.toLowerCase().trim();
+
+        // Regex rule matching structural domain components
+        const validDomainPattern = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
+        if (!validDomainPattern.test(normalizedDomain)) {
+            return res.status(400).json({ error: 'Provide a valid corporate domain structure (e.g., brand.com).' });
         }
 
         const plainTextApiKey = `nsb_live_${crypto.randomBytes(24).toString('hex')}`;
@@ -20,9 +31,9 @@ router.post('/merchants/onboard', async (req: Request, res: Response) => {
         const assignedSubAccountId = process.env.NOMBA_SUB_ACCOUNT_ID; // Binds to your team's assigned sandbox block
 
         const result = await pool.query(
-            `INSERT INTO merchants (business_name, api_key_hash, nomba_account_id, webhook_url, webhook_secret)
-             VALUES ($1, $2, $3, $4, $5) RETURNING id, business_name, created_at`,
-            [businessName, apiKeyHash, assignedSubAccountId, webhookUrl || null, webhookSecret]
+            `INSERT INTO merchants (business_name, domain, api_key_hash, nomba_account_id, webhook_url, webhook_secret)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, business_name, domain, created_at`,
+            [businessName, normalizedDomain, apiKeyHash, assignedSubAccountId, webhookUrl || null, webhookSecret]
         );
 
         return res.status(201).json({
@@ -32,6 +43,14 @@ router.post('/merchants/onboard', async (req: Request, res: Response) => {
             merchant: result.rows[0]
         });
     } catch (error: any) {
+        // 🔒 Intercept Postgres unique key violation codes (23505) gracefully 
+        if (error.code === '23505' || error.message.includes('unique constraint')) {
+            return res.status(409).json({ 
+                success: false,
+                error: 'CONFLICT',
+                message: 'The enterprise corporate domain name has already been assigned to an active billing workspace partition.' 
+            });
+        }
         return res.status(500).json({ error: error.message });
     }
 });
@@ -66,6 +85,7 @@ router.get('/plans', async (req: Request, res: Response) => {
         if (!merchantId) return res.status(401).json({ error: 'Unauthenticated ID.' });
 
         const tenantPlans = await executeTenantQuery(merchantId, async (client) => {
+            // Note: RLS handles filtering, keeping the WHERE explicit guarantees zero transaction pool context bleed
             const queryResult = await client.query('SELECT * FROM plans WHERE merchant_id = $1', [merchantId]);
             return queryResult.rows;
         });

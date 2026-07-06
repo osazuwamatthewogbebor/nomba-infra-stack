@@ -98,6 +98,9 @@ ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saved_cards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE merchants ADD COLUMN domain VARCHAR(255) UNIQUE;
+
+COMMENT ON COLUMN merchants.domain IS 'Globally unique enterprise corporate domain anchor preventing multi-tenant duplicate registration.';
 
 CREATE POLICY plan_isolation_policy ON plans FOR ALL USING (merchant_id = NULLIF(current_setting('app.current_merchant_id', true), '')::UUID);
 CREATE POLICY customer_isolation_policy ON customers FOR ALL USING (merchant_id = NULLIF(current_setting('app.current_merchant_id', true), '')::UUID);

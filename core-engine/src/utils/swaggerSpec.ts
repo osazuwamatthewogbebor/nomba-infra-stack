@@ -9,6 +9,10 @@ export const swaggerDocument = {
     {
       url: "/v1",
       description: "Local Runtime Baseline Server"
+    },
+    {
+      url: "/v1",
+      description: "Production Environment Base Runtime Server"
     }
   ],
   components: {
@@ -21,6 +25,11 @@ export const swaggerDocument = {
       }
     }
   },
+  security: [
+    {
+      MerchantIdentityHeader: []
+    }
+  ],
   paths: {
     "/merchants/onboard": {
       post: {

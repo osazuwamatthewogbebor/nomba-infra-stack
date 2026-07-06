@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { swaggerDocument } from "./utils/swaggerSpec";
 import merchantRoutes from './routes/merchant';
@@ -10,13 +10,16 @@ import adminRouter from './routes/admin';
 const app = express();
 app.use(express.json());
 
-// Serve Live UI Documentation Interactive Manual instantly with cache busting flags
-app.use('/api-docs', (req: Request, res: Response, next) => {
-  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-  next();
-});
+// Serve Live UI Documentation Interactive Manual instantly with Cache-Control bypass
+app.use('/docs', (req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store'); // Tells Cloudflare explicitly not to cache
+    next();
+}, swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
 app.use(
-  '/api-docs',
+  '/docs',
   swaggerUi.serve,
   swaggerUi.setup(swaggerDocument, {
     swaggerOptions: { persistAuthorization: true },

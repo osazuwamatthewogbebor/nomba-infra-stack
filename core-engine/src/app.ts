@@ -11,15 +11,17 @@ const app = express();
 app.use(express.json());
 
 // Serve Live UI Documentation Interactive Manual instantly with cache busting flags
+app.use('/docs', (req: Request, res: Response, next) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  next();
+});
 app.use(
-    '/docs', 
-    swaggerUi.serve, 
-    swaggerUi.setup(swaggerDocument, {
-        swaggerOptions: {
-            persistAuthorization: true, 
-        },
-        customSiteTitle: "Subflow Core Billing Docs Core"
-    })
+  '/docs',
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDocument, {
+    swaggerOptions: { persistAuthorization: true },
+    customSiteTitle: "Subflow Core Billing Docs Core"
+  })
 );
 
 // Mount modular sub-routers

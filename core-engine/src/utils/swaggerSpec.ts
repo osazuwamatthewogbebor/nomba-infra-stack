@@ -171,12 +171,128 @@ export const swaggerDocument = {
         }
       }
     },
+    "/checkout/customers": {
+      get: {
+        tags: ["Customer Management Pipeline"],
+        summary: "List Workspace Registered Customers",
+        description: "Retrieves all profiles logged under the active merchant context. Isolation is enforced securely downstream via PostgreSQL Row-Level Security.",
+        parameters: [
+          {
+            in: "header",
+            name: "x-merchant-id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The public tenant UUIDv4 handle used to map PostgreSQL Row-Level Security (RLS) execution context."
+          }
+        ],
+        responses: {
+          "200": {
+            description: "Isolated customer index matrix successfully retrieved.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    count: { type: "integer", example: 1 },
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string", format: "uuid" },
+                          email: { type: "string", example: "subscriber@customer.ng" },
+                          va_bank_name: { type: "string", example: "Nomba Core Sandbox Mock Bank" },
+                          va_account_number: { type: "string", example: "1012345678" },
+                          va_account_ref: { type: "string", example: "ref_8a9f2b..." },
+                          created_at: { type: "string", format: "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/checkout/customers/{id}/details": {
+      get: {
+        tags: ["Customer Management Pipeline"],
+        summary: "Retrieve Customer 360° Profile & Billing Metrics",
+        description: "Compiles deep customer entity metrics alongside their complete historical multi-tenant subscription tiers under strict row-level isolation bounds.",
+        parameters: [
+          {
+            in: "header",
+            name: "x-merchant-id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The public tenant UUIDv4 handle used to map PostgreSQL Row-Level Security (RLS) execution context."
+          },
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "The explicit, target Customer identification UUIDv4 handle."
+          }
+        ],
+        responses: {
+          "200": {
+            description: "Customer lifecycle diagnostics aggregated successfully.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        profile: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string", format: "uuid" },
+                            merchant_id: { type: "string", format: "uuid" },
+                            email: { type: "string" },
+                            va_bank_name: { type: "string" },
+                            va_account_number: { type: "string" }
+                          }
+                        },
+                        subscriptions: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              subscription_id: { type: "string", format: "uuid" },
+                              status: { type: "string", example: "ACTIVE" },
+                              payment_method: { type: "string", example: "VIRTUAL_ACCOUNT" },
+                              current_period_start: { type: "string", format: "date-time" },
+                              current_period_end: { type: "string", format: "date-time" },
+                              plan_name: { type: "string", example: "Premium Enterprise Tier" },
+                              amount_kobo: { type: "integer", example: 500000 },
+                              billing_interval: { type: "string", example: "monthly" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": { description: "Target Customer context not found within this workspace partition." }
+        }
+      }
+    },
     "Outbound Fan-out Payload Specification (For Downstream Developers)": {
       description: "This document section details the signed payloads dispatchDeveloperWebhook sends out to your registered developers' servers whenever a payment lifecycle mutation clears.",
       post: {
         tags: ["Outbound Developer Webhooks (Fan-out Engine)"],
         summary: "Downstream Event Ingestion Structure (Reference Spec)",
-        security: [], // Incoming payloads to downstream developers do not consume internal bearer schemes
+        security: [], 
         parameters: [
           { in: "header", name: "X-Platform-Signature", required: true, schema: { type: "string" }, description: "HMAC-SHA256 signature calculated across the timestamp and body payload string using the workspace's webhookSecret." },
           { in: "header", name: "X-Platform-Timestamp", required: true, schema: { type: "string" } }

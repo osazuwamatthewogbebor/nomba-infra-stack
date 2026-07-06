@@ -50,8 +50,8 @@ The platform separates real-time payment ingestion from heavy asynchronous datab
 
 The system serves interactive Swagger UI documentation manuals matching production configurations.
 
-* **Local Development Environment:** `http://localhost:5000/docs`
-* **Live Staging/Production Deployment:** `https://nomba-infra-stack.pxxl.run/docs`
+* **Local Development Environment:** `http://localhost:5000/api-docs`
+* **Live Staging/Production Deployment:** `https://nomba-infra-stack.pxxl.run/api-docs`
 
 ### Decoupled Authentication Security Setup
 

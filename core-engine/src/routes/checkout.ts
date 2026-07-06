@@ -18,10 +18,13 @@ interface InitializeCheckoutPayload {
     customerPhone?: string;
 }
 
+const isValidUuid = (uuid: string): boolean => {
+    const uuidv4Regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidv4Regex.test(uuid);
+};
+
 /**
  * POST /v1/checkout/initialize
- * Creates a stateful subscription instance. Automatically provisions a persistent 
- * Nomba Virtual NUBAN with KYC anchors or triggers tokenized card checkout links.
  */
 router.post('/initialize', async (req: Request, res: Response) => {
     const client = await pool.connect();
@@ -33,24 +36,21 @@ router.post('/initialize', async (req: Request, res: Response) => {
             callbackUrl, 
             paymentMethod = 'CARD',
             customerBvn,
-            customerNin,
-            customerPhone
+            customerNin
         } = req.body as InitializeCheckoutPayload;
         
-        if (!merchantId) {
-            return res.status(401).json({ success: false, error: 'Unauthorized: Missing tenant identity header.' });
+        if (!merchantId || !isValidUuid(merchantId)) {
+            return res.status(401).json({ success: false, error: 'Unauthorized: Missing or malformed tenant identity handle.' });
         }
 
-        if (!planId || !customerEmail) {
-            return res.status(400).json({ success: false, error: 'Missing required parameters: planId and customerEmail are mandatory.' });
+        if (!planId || !isValidUuid(planId) || !customerEmail) {
+            return res.status(400).json({ success: false, error: 'Missing or malformed required parameters: planId (UUID) and customerEmail are mandatory.' });
         }
 
         await client.query('BEGIN');
 
-        // Enforce session-scoped Row-Level Security context mapping
         await client.query(`SET LOCAL app.current_merchant_id = ${client.escapeLiteral(merchantId)}`);
 
-        // Resolve plan details under active RLS isolation boundary
         const planQuery = await client.query('SELECT * FROM plans WHERE id = $1', [planId]);
         if (planQuery.rows.length === 0) {
             await client.query('ROLLBACK');
@@ -58,7 +58,6 @@ router.post('/initialize', async (req: Request, res: Response) => {
         }
         const plan = planQuery.rows[0];
 
-        // Upsert Customer profile entity inside the isolated tenant space
         const customerUpsert = await client.query(
             `INSERT INTO customers (merchant_id, email) 
              VALUES ($1, $2)
@@ -70,55 +69,54 @@ router.post('/initialize', async (req: Request, res: Response) => {
         let customer = customerUpsert.rows[0];
 
         const gatewayAccessToken = await getNombaAccessToken();
-        const subAccountId = process.env.NOMBA_SUB_ACCOUNT_ID; // Your unified platform sub-account ID
+        const parentAccountId = process.env.NOMBA_PARENT_ACCOUNT_ID; 
+        const subAccountId = process.env.NOMBA_SUB_ACCOUNT_ID; 
         const orderReference = crypto.randomUUID();
 
-        // --- PATH A: HYBRID VIRTUAL ACCOUNT TRANSFER ROUTE ---
+        // --- PATH A: STRIPPED & COMPLIANT VIRTUAL ACCOUNT ROUTE ---
         if (paymentMethod === 'VIRTUAL_ACCOUNT') {
             if (!customer.va_account_number) {
+                // Nomba requires accountRef length min: 16, max: 64
                 const accountRef = `ref_${crypto.randomBytes(8).toString('hex')}`;
                 
-                // Construct account generation payload binding compliant KYC identity anchors
+                // Pure payload modeled strictly against Nomba's CreateVirtualAccountRequest schema
                 const vaPayload = {
                     accountRef: accountRef,
-                    phoneNumber: customerPhone || "08012345678",
-                    email: customerEmail.toLowerCase().trim(),
-                    // Attach provided identity verification anchor or cleanly fallback to whitelisted sandbox BVN
-                    bvn: customerBvn || customerNin || process.env.SANDBOX_TEST_BVN || "22222222222",
-                    bankCode: "999992", // Nomba Core Sandbox Mock Bank
-                    accountName: `${plan.name} Sub`
+                    accountName: `${plan.name.substring(0, 50)} Sub`, // Safe headroom for max length limits
+                    bvn: customerBvn || customerNin || process.env.SANDBOX_TEST_BVN || "22222222222"
                 };
 
                 logger.info(`Requesting persistent NUBAN allocation from Nomba rails for customer: ${customer.id}`);
 
                 const vaResponse = await axios.post(
-                    `${process.env.NOMBA_API_URL}/v1/accounts/virtual/${subAccountId}`,
+                    `${process.env.NOMBA_API_URL}/v1/accounts/virtual`,
                     vaPayload,
                     {
                         headers: {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${gatewayAccessToken}`,
-                            'accountId': process.env.NOMBA_PARENT_ACCOUNT_ID || ''
+                            'accountId': parentAccountId || '' // Parent account identifier header parameter
                         }
                     }
                 );
 
                 if (vaResponse.data?.code === '00') {
                     const resData = vaResponse.data.data;
+                    
+                    // Maps accurate API values: resData.bankName and resData.bankAccountNumber
                     const vaUpdate = await client.query(
                         `UPDATE customers 
                          SET va_bank_name = $1, va_account_number = $2, va_account_ref = $3
                          WHERE id = $4 
                          RETURNING *`,
-                        [resData.bankName, resData.accountNumber, accountRef, customer.id]
+                        [resData.bankName, resData.bankAccountNumber, accountRef, customer.id]
                     );
                     customer = vaUpdate.rows[0];
                 } else {
-                    throw new Error(vaResponse.data?.description || 'Virtual Account allocation rejected.');
+                    throw new Error(vaResponse.data?.description || 'Virtual Account allocation rejected by gateway schema parameters.');
                 }
             }
 
-            // Immediately record subscription status as ACTIVE—awaiting inbound credit transfer webhooks
             await client.query(
                 `INSERT INTO subscriptions (
                     merchant_id, customer_id, plan_id, payment_method, status, 
@@ -170,7 +168,7 @@ router.post('/initialize', async (req: Request, res: Response) => {
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${gatewayAccessToken}`,
-                    'accountId': process.env.NOMBA_PARENT_ACCOUNT_ID || '',
+                    'accountId': parentAccountId || '',
                 }
             }
         );
@@ -178,7 +176,6 @@ router.post('/initialize', async (req: Request, res: Response) => {
         if (response.data?.code === '00') {
             const checkoutData = response.data.data;
 
-            // Pre-stage pending subscription lifecycle state logs
             await client.query(
                 `INSERT INTO subscriptions (
                     merchant_id, customer_id, plan_id, payment_method, status, 
@@ -208,7 +205,7 @@ router.post('/initialize', async (req: Request, res: Response) => {
         });
         return res.status(500).json({ 
             success: false, 
-            error: error.message || 'Failed to negotiate pipeline operation with Nomba.' 
+            error: error.response?.data?.description || error.message || 'Database validation or upstream gateway communication failure.' 
         });
     } finally {
         client.release();
@@ -217,16 +214,14 @@ router.post('/initialize', async (req: Request, res: Response) => {
 
 /**
  * POST /v1/checkout/preview-upgrade
- * Calculates exact remaining value ratios mid-cycle and previews financial requirements
- * before a customer switches pricing tiers.
  */
 router.post('/preview-upgrade', async (req: Request, res: Response) => {
     try {
         const merchantId = req.headers['x-merchant-id'] as string;
         const { subscriptionId, targetNewPlanId } = req.body;
 
-        if (!merchantId || !subscriptionId || !targetNewPlanId) {
-            return res.status(400).json({ error: "Missing required properties inside payload context." });
+        if (!merchantId || !isValidUuid(merchantId) || !subscriptionId || !isValidUuid(subscriptionId) || !targetNewPlanId || !isValidUuid(targetNewPlanId)) {
+            return res.status(400).json({ error: "Missing or malformed required properties inside payload context." });
         }
 
         const queryResult = await pool.query(
@@ -254,7 +249,6 @@ router.post('/preview-upgrade', async (req: Request, res: Response) => {
 
         const targetNewPlanAmount = targetPlanResult.rows[0].amount_kobo;
 
-        // Compute relative time ratios via formula calculations
         const financialMatrix = calculateProratedUpgradeAmount(
             Number(subscription.current_amount),
             Number(targetNewPlanAmount),
@@ -279,6 +273,84 @@ router.post('/preview-upgrade', async (req: Request, res: Response) => {
     } catch (error: any) {
         logger.error('Proration tracking preview runtime error:', error.message);
         return res.status(500).json({ error: 'Failed to safely compute proration metric preview arrays.' });
+    }
+});
+
+/**
+ * GET /v1/checkout/customers
+ */
+router.get('/customers', async (req: Request, res: Response) => {
+    const client = await pool.connect();
+    try {
+        const merchantId = String(req.headers['x-merchant-id'] || '');
+        if (!merchantId || !isValidUuid(merchantId)) {
+            return res.status(401).json({ success: false, error: 'Unauthorized: Missing or malformed tenant identity header.' });
+        }
+
+        await client.query(`SET LOCAL app.current_merchant_id = ${client.escapeLiteral(merchantId)}`);
+
+        const result = await client.query(
+            `SELECT id, email, va_bank_name, va_account_number, va_account_ref, created_at 
+             FROM customers 
+             ORDER BY created_at DESC`
+        );
+
+        return res.status(200).json({
+            success: true,
+            count: result.rows.length,
+            data: result.rows
+        });
+    } catch (error: any) {
+        logger.error('Failed to retrieve customer workspace matrix:', error.message);
+        return res.status(500).json({ success: false, error: 'Database context customer retrieval failed.' });
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * GET /v1/checkout/customers/:id/details
+ */
+router.get('/customers/:id/details', async (req: Request, res: Response) => {
+    const client = await pool.connect();
+    try {
+        const merchantId = String(req.headers['x-merchant-id'] || '');
+        const customerId = String(req.params.id);
+
+        if (!merchantId || !isValidUuid(merchantId) || !customerId || !isValidUuid(customerId)) {
+            return res.status(400).json({ success: false, error: 'Invalid workspace context or customer identification parameter layout.' });
+        }
+
+        await client.query(`SET LOCAL app.current_merchant_id = ${client.escapeLiteral(merchantId)}`);
+
+        const customerResult = await client.query('SELECT * FROM customers WHERE id = $1', [customerId]);
+        if (customerResult.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Customer entity not found within this workspace partition.' });
+        }
+
+        const subscriptionHistory = await client.query(
+            `SELECT s.id as subscription_id, s.status, s.payment_method, 
+                    s.current_period_start, s.current_period_end,
+                    p.name as plan_name, p.amount_kobo, p.billing_interval
+             FROM subscriptions s
+             JOIN plans p ON s.plan_id = p.id
+             WHERE s.customer_id = $1
+             ORDER BY s.created_at DESC`,
+            [customerId]
+        );
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                profile: customerResult.rows[0],
+                subscriptions: subscriptionHistory.rows
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to compile customer profiles:', error.message);
+        return res.status(500).json({ success: false, error: 'Internal processing customer profile compilation crash.' });
+    } finally {
+        client.release();
     }
 });
 
